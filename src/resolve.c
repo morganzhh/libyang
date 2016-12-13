@@ -5661,20 +5661,17 @@ resolve_when_unlink_nodes(struct lys_node *snode, struct lyd_node **node, struct
 static int
 resolve_when_relink_nodes(struct lyd_node *node, struct lyd_node *unlinked_nodes, enum lyxp_node_type ctx_node_type)
 {
-    struct lyd_node *elem;
+    struct lyd_node *elem = unlinked_nodes;
 
-    LY_TREE_FOR_SAFE(unlinked_nodes, unlinked_nodes, elem) {
-        if (ctx_node_type == LYXP_NODE_ELEM) {
-            if (lyd_insert(node, elem)) {
-                return -1;
-            }
-        } else {
-            if (lyd_insert_after(node, elem)) {
-                return -1;
-            }
+    if (ctx_node_type == LYXP_NODE_ELEM) {
+        if (lyd_insert(node, elem)) {
+            return -1;
+        }
+    } else {
+        if (lyd_insert_after(node, elem)) {
+            return -1;
         }
     }
-
     return EXIT_SUCCESS;
 }
 
@@ -7036,8 +7033,6 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
                     unres->node[i] = parent;
 
                     /* auto-delete */
-                    LOGVRB("auto-delete node \"%s\" due to when condition (%s)", ly_errpath(),
-                                    ((struct lys_node_leaf *)unres->node[i]->schema)->when->cond);
                     if (*root && *root == unres->node[i]) {
                         *root = (*root)->next;
                     }
