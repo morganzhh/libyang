@@ -27,6 +27,7 @@
 #include "dict_private.h"
 #include "parser.h"
 #include "tree_internal.h"
+#include "resolve.h"
 
 #define YANG_FAKEMODULE_PATH "../models/yang@2016-02-11.h"
 #define IETF_INET_TYPES_PATH "../models/ietf-inet-types@2013-07-15.h"
@@ -179,7 +180,7 @@ ly_ctx_destroy(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_n
 API const struct lys_submodule *
 ly_ctx_get_submodule2(const struct lys_module *main_module, const char *submodule)
 {
-    struct lys_submodule *result;
+    const struct lys_submodule *result;
     int i;
 
     if (!main_module || !submodule) {
@@ -190,10 +191,16 @@ ly_ctx_get_submodule2(const struct lys_module *main_module, const char *submodul
     /* search in submodules list */
     for (i = 0; i < main_module->inc_size; i++) {
         result = main_module->inc[i].submodule;
-        if (result && ly_strequal(submodule, result->name, 0)) {
+        if (ly_strequal(submodule, result->name, 0)) {
             return result;
         }
+
+        /* in YANG 1.1 all the submodules must be included in the main module, so we are done.
+         * YANG 1.0 allows (is unclear about denying it) to include a submodule only in another submodule
+         * but when libyang parses such a module it adds the include into the main module so we are also done.
+         */
     }
+
 
     return NULL;
 }
@@ -357,14 +364,14 @@ ly_ctx_get_module_older(const struct ly_ctx *ctx, const struct lys_module *modul
 }
 
 API void
-ly_ctx_set_module_clb(struct ly_ctx *ctx, ly_module_clb clb, void *user_data)
+ly_ctx_set_module_imp_clb(struct ly_ctx *ctx, ly_module_imp_clb clb, void *user_data)
 {
-    ctx->module_clb = clb;
-    ctx->module_clb_data = user_data;
+    ctx->imp_clb = clb;
+    ctx->imp_clb_data = user_data;
 }
 
-API ly_module_clb
-ly_ctx_get_module_clb(const struct ly_ctx *ctx, void **user_data)
+API ly_module_imp_clb
+ly_ctx_get_module_imp_clb(const struct ly_ctx *ctx, void **user_data)
 {
     if (!ctx) {
         ly_errno = LY_EINVAL;
@@ -372,9 +379,25 @@ ly_ctx_get_module_clb(const struct ly_ctx *ctx, void **user_data)
     }
 
     if (user_data) {
-        *user_data = ctx->module_clb_data;
+        *user_data = ctx->imp_clb_data;
     }
-    return ctx->module_clb;
+    return ctx->imp_clb;
+}
+
+API void
+ly_ctx_set_module_data_clb(struct ly_ctx *ctx, ly_module_data_clb clb, void *user_data)
+{
+    ctx->data_clb = clb;
+    ctx->data_clb_data = user_data;
+}
+
+API ly_module_data_clb
+ly_ctx_get_module_data_clb(const struct ly_ctx *ctx, void **user_data)
+{
+    if (user_data) {
+        *user_data = ctx->data_clb_data;
+    }
+    return ctx->data_clb;
 }
 
 const struct lys_module *
@@ -417,28 +440,14 @@ ly_ctx_load_sub_module(struct ly_ctx *ctx, struct lys_module *module, const char
                 return mod;
             }
         }
-    } else {
-        /* searching for submodule, try if it is already loaded */
-        mod = (struct lys_module *)ly_ctx_get_submodule2(module, name);
-        if (mod) {
-            if (!revision || (mod->rev_size && ly_strequal(mod->rev[0].date, revision, 0))) {
-                /* success */
-                return mod;
-            } else {
-                /* there is already another revision of the submodule */
-                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, mod->rev[0].date, "revision");
-                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Multiple revisions of a submodule included.");
-                return NULL;
-            }
-        }
     }
 
-    if (ctx->module_clb) {
+    if (ctx->imp_clb) {
         if (module) {
             mod = lys_main_module(module);
-            module_data = ctx->module_clb(mod->name, (mod->rev_size ? mod->rev[0].date : NULL), name, revision, ctx->module_clb_data, &format, &module_data_free);
+            module_data = ctx->imp_clb(mod->name, (mod->rev_size ? mod->rev[0].date : NULL), name, revision, ctx->imp_clb_data, &format, &module_data_free);
         } else {
-            module_data = ctx->module_clb(name, revision, NULL, NULL, ctx->module_clb_data, &format, &module_data_free);
+            module_data = ctx->imp_clb(name, revision, NULL, NULL, ctx->imp_clb_data, &format, &module_data_free);
         }
         if (!module_data) {
             if (module || revision) {
@@ -458,7 +467,7 @@ ly_ctx_load_sub_module(struct ly_ctx *ctx, struct lys_module *module, const char
         }
 
         if (module) {
-            mod = (struct lys_module *)lys_submodule_parse(module, module_data, format, unres);
+            mod = (struct lys_module *)lys_sub_parse_mem(module, module_data, format, unres);
         } else {
             mod = (struct lys_module *)lys_parse_mem(ctx, module_data, format);
         }
@@ -487,8 +496,8 @@ ly_ctx_load_module(struct ly_ctx *ctx, const char *name, const char *revision)
 /*
  * mods - set of removed modules, if NULL all modules are supposed to be removed so any backlink is invalid
  */
-static int
-ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
+static void
+ctx_modules_undo_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
 {
     int o;
     uint8_t j;
@@ -519,7 +528,8 @@ ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
                 mod->features[j].depfeatures = NULL;
             }
         }
-        /* identities */
+
+        /* 2) identities */
         for (u = 0; u < mod->ident_size; u++) {
             if (!mod->ident[u].der) {
                 continue;
@@ -538,7 +548,7 @@ ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
             }
         }
 
-        /* leafrefs */
+        /* 3) leafrefs */
         for (elem = next = mod->data; elem; elem = next) {
             if (elem->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
                 leaf = (struct lys_node_leaf *)elem; /* shortcut */
@@ -586,8 +596,55 @@ ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
             }
         }
     }
+}
 
-    return EXIT_SUCCESS;
+static int
+ctx_modules_redo_backlinks(struct ly_set *mods)
+{
+    unsigned int i, j, k, s;
+    struct lys_module *mod;
+    struct lys_node *next, *elem;
+    struct lys_type *type;
+    struct lys_feature *feat;
+
+    for (i = 0; i < mods->number; ++i) {
+        mod = (struct lys_module *)mods->set.g[i]; /* shortcut */
+
+        /* identities */
+        for (j = 0; j < mod->ident_size; j++) {
+            for (k = 0; k < mod->ident[j].base_size; k++) {
+                resolve_identity_backlink_update(&mod->ident[j], mod->ident[j].base[k]);
+            }
+        }
+
+        /* features */
+        for (j = 0; j < mod->features_size; j++) {
+            for (k = 0; k < mod->features[j].iffeature_size; k++) {
+                resolve_iffeature_getsizes(&mod->features[j].iffeature[k], NULL, &s);
+                while (s--) {
+                    feat = mod->features[j].iffeature[k].features[s]; /* shortcut */
+                    if (!feat->depfeatures) {
+                        feat->depfeatures = ly_set_new();
+                    }
+                    ly_set_add(feat->depfeatures, &mod->features[j], LY_SET_OPT_USEASLIST);
+                }
+            }
+        }
+
+        /* leafrefs */
+        LY_TREE_DFS_BEGIN(mod->data, next, elem) {
+            if (elem->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
+                type = &((struct lys_node_leaf *)elem)->type; /* shortcut */
+                if (type->base == LY_TYPE_LEAFREF) {
+                    lys_leaf_add_leafref_target(type->info.lref.target, elem);
+                }
+            }
+
+            LY_TREE_DFS_END(mod->data, next, elem);
+        }
+    }
+
+    return 0;
 }
 
 API int
@@ -687,7 +744,7 @@ imported:
     }
 
     /* maintain backlinks (start with internal ietf-yang-library which have leafs as possible targets of leafrefs */
-    ctx_modules_maintain_backlinks(ctx, mods);
+    ctx_modules_undo_backlinks(ctx, mods);
 
     /* remove the applied deviations and augments */
     for (u = 0; u < mods->number; u++) {
@@ -808,7 +865,7 @@ checkdependency:
     }
 
     /* maintain backlinks (start with internal ietf-yang-library which have leafs as possible targets of leafrefs */
-    ctx_modules_maintain_backlinks(ctx, mods);
+    ctx_modules_redo_backlinks(mods);
 
     /* re-apply the deviations and augments */
     for (v = 0; v < mods->number; v++) {
@@ -938,7 +995,7 @@ imported:
     ctx->models.module_set_id++;
 
     /* maintain backlinks (start with internal ietf-yang-library which have leafs as possible targets of leafrefs */
-    ctx_modules_maintain_backlinks(ctx, mods);
+    ctx_modules_undo_backlinks(ctx, mods);
 
     /* free the modules */
     for (u = 0; u < mods->number; u++) {
@@ -969,8 +1026,8 @@ ly_ctx_clean(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_nod
     ctx->models.used = INTERNAL_MODULES_COUNT;
     ctx->models.module_set_id++;
 
-    /* maintain backlinks (actually done only with ietf-yang-library since its leafs cna be target of leafref) */
-    ctx_modules_maintain_backlinks(ctx, NULL);
+    /* maintain backlinks (actually done only with ietf-yang-library since its leafs can be target of leafref) */
+    ctx_modules_undo_backlinks(ctx, NULL);
 }
 
 API const struct lys_module *

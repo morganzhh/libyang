@@ -40,6 +40,8 @@ const char *lys_module_a = \
         xmlns:a=\"urn:a\">                            \
   <namespace uri=\"urn:a\"/>                          \
   <prefix value=\"a_mod\"/>                           \
+  <include module=\"asub\"/>                          \
+  <include module=\"atop\"/>                          \
   <revision date=\"2015-01-01\">                      \
     <description>                                     \
       <text>version 1</text>                          \
@@ -48,8 +50,6 @@ const char *lys_module_a = \
       <text>RFC XXXX</text>                           \
     </reference>                                      \
   </revision>                                         \
-  <include module=\"asub\"/>                          \
-  <include module=\"atop\"/>                          \
   <feature name=\"foo\"/>                             \
   <grouping name=\"gg\">                              \
     <leaf name=\"bar-gggg\">                          \
@@ -171,18 +171,18 @@ const char *lys_module_a_with_typo = \
 
 char *result_tree = "\
 module: a\n\
-   +--rw top\n\
-   |  +--rw bar-sub2\n\
-   +--rw x\n\
-      +--rw bubba?      string\n";
+    +--rw top\n\
+    |  +--rw bar-sub2\n\
+    +--rw x\n\
+       +--rw bubba?      string\n";
 
 char *result_yang = "\
 module a {\n\
   namespace \"urn:a\";\n\
   prefix a_mod;\n\
 \n\
-  include \"atop\";\n\
   include \"asub\";\n\
+  include \"atop\";\n\
 \n\
   revision \"2015-01-01\" {\n\
     description\n\
@@ -237,8 +237,8 @@ char *result_yin = "\
         xmlns:a_mod=\"urn:a\">\n\
   <namespace uri=\"urn:a\"/>\n\
   <prefix value=\"a_mod\"/>\n\
-  <include module=\"atop\"/>\n\
   <include module=\"asub\"/>\n\
+  <include module=\"atop\"/>\n\
   <revision date=\"2015-01-01\">\n\
     <description>\n\
       <text>version 1</text>\n\

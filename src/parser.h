@@ -63,8 +63,7 @@ struct lys_module *lyp_search_file(struct ly_ctx *ctx, struct lys_module *module
 struct lys_type *lyp_get_next_union_type(struct lys_type *type, struct lys_type *prev_type, int *found);
 
 struct lys_type *lyp_parse_value(struct lys_type *type, const char **value_, struct lyxml_elem *xml,
-                                         struct lyd_node *tree, struct lyd_node_leaf_list *leaf,
-                                         int store, int resolvable, int dflt);
+                                struct lyd_node_leaf_list *leaf, int store, int dflt);
 
 int lyp_check_length_range(const char *expr, struct lys_type *type);
 
@@ -76,6 +75,8 @@ int fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyx
 int lyp_check_status(uint16_t flags1, struct lys_module *mod1, const char *name1,
                      uint16_t flags2, struct lys_module *mod2, const char *name2,
                      const struct lys_node *node);
+
+void lyp_del_includedup(struct lys_module *mod);
 
 int dup_typedef_check(const char *type, struct lys_tpdf *tpdf, int size);
 
@@ -102,8 +103,9 @@ int lyp_check_date(const char *date);
 int lyp_check_mandatory_augment(struct lys_node_augment *node, const struct lys_node *target);
 int lyp_check_mandatory_choice(struct lys_node *node);
 
-int lyp_check_include(struct lys_module *module, struct lys_submodule *submodule, const char *value,
+int lyp_check_include(struct lys_module *module, const char *value,
                       struct lys_include *inc, struct unres_schema *unres);
+int lyp_check_include_missing(struct lys_module *main_module);
 
 int lyp_check_import(struct lys_module *module, const char *value, struct lys_import *imp);
 
@@ -112,12 +114,33 @@ int lyp_check_import(struct lys_module *module, const char *value, struct lys_im
  *
  * @param module Main module
  * @param inc Filled include structure
- * @param line
  * @return 0 for success, 1 for failure
  */
 int lyp_propagate_submodule(struct lys_module *module, struct lys_include *inc);
 
-int lyp_ctx_add_module(struct lys_module **module);
+/* return: -1 = error, 0 = succes, 1 = already there */
+int lyp_ctx_check_module(struct lys_module *module);
+
+int lyp_ctx_add_module(struct lys_module *module);
+
+/**
+ * @brief mmap() wrapper for parsers. To unmap, use lyp_munmap().
+ *
+ * @param[in] prot The desired memory protection as in case of mmap().
+ * @param[in] fd File descriptor for getting data.
+ * @param[in] addsize Number of additional bytes to be allocated (and zeroed) after the implicitly added
+ *                    string-terminating NULL byte.
+ * @param[out] length length of the allocated memory.
+ * @return On success, the pointer to the memory where the file data resists is returned. On error, the value MAP_FAILED
+ * is returned and #ly_errno value is set.
+ */
+void *
+lyp_mmap(int fd, size_t addsize, size_t *length);
+
+/**
+ * @brief Unmap function for the data mapped by lyp_mmap()
+ */
+int lyp_munmap(void *addr, size_t length);
 
 /**
  * Store UTF-8 character specified as 4byte integer into the dst buffer.
