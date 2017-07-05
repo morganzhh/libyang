@@ -193,7 +193,7 @@ endif(STATIC)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 add_library(yangobj OBJECT ${libsrc})
 add_library(yang SHARED $<TARGET_OBJECTS:yangobj>)
-set_target_properties(yang PROPERTIES VERSION ${LIBYANG_VERSION} SOVERSION ${LIBYANG_SOVERSION})
+# set_target_properties(yang PROPERTIES VERSION ${LIBYANG_VERSION} SOVERSION ${LIBYANG_SOVERSION})
 set_target_properties(yang PROPERTIES COMPILE_FLAGS "-fvisibility=hidden")
 
 # link math
